@@ -1,35 +1,48 @@
 import os
 import sys
 import glob
+import time
 import torch
 import julius
 import librosa
 import torchaudio
 import numpy as np
 from tqdm import tqdm
+import multiprocessing
 import matplotlib.pyplot as plt
 from skimage.feature import peak_local_max
 
 def fingerprint(
-    x : torch.Tensor, 
-    sample_rate : int,
+    audio_file : str,
+    sample_rate : int = 22050,
     n_fft : int = 2048, 
     hop_length : int = 1024,
     n_bins : int = 128,
-    filename : str = None, 
+    plot: bool = False,
     ) -> torch.Tensor:
     """ Compute the finger print for an audio signal.
     
     Args:
-        x (tensor): A 1d tensor containing the audio samples.
-        sample_rate (float): Sample rate of the audio signal.
+        audio_file (str): Path to audio file to fingerprint.
+        sample_rate (float): Desired sample rate of the audio signal.
         n_fft (int): Size of the FFT used for computation of the STFT.
         hop_length (int): Number of steps between each frame in the STFT.
-        n_bins (int): Number of mel-frequency bins
+        n_bins (int): Number of mel-frequency bins.
+        plot (bool): Save a plot of the spectrogram and peaks.
     
     Returns:
         f (tensor): Fingerprint corresponding to the input audio signal.
+
+    Note: If the audio loaded is at a different sample rate to the one specificed
+    the audio will be resampled to match the specified sample rate. 
     """
+
+    # load audio file
+    x, sr = torchaudio.load(audio_file)
+
+    # resample if needed
+    if sr != sample_rate:
+        x = julius.resample_frac(x, sr, sample_rate) # resample to 22.05 kHz
 
     # peak normalize x
     x /= x.abs().max()
@@ -50,11 +63,12 @@ def fingerprint(
     X_mag_dB = 20 * torch.log(X_mag.clamp(1e-8))
 
     peaks = peak_local_max(X_mag_dB.numpy(), min_distance=10)
-
-    if filename is not None:
+    
+    filename = os.path.basename(audio_file).replace(".wav", "")
+    if plot:
         plt.pcolormesh(X_mag_dB)
         plt.scatter(peaks[:,1], peaks[:,0], facecolors='none', edgecolors='k')
-        plt.savefig(f'data/outputs/{filename}_fingerprint.png')
+        plt.savefig(f'data/outputs/{filename}.png')
         plt.close('all')
 
     # what is the best way to define the target zone?
@@ -91,19 +105,23 @@ if __name__ == '__main__':
     query_dir = 'data/query_recordings/'
 
     # generate hashes for all items in database
-    db_hashes = []
     database_files = sorted(glob.glob(os.path.join(database_dir, "*.wav")))
+    #database_files = [(db_file) for db_file in database_files]
     print("Building database...")
-    for database_file in tqdm(database_files, ncols=80):
-        x_db, sr_db = torchaudio.load(database_file)
-        db_hashes += fingerprint(x_db, sr_db, filename=os.path.basename(database_file))
+    start = time.perf_counter()
+    with multiprocessing.Pool(processes=12) as pool:
+        results = pool.map(fingerprint, database_files)
+    stop = time.perf_counter()
+    print(f"Built database of {len(database_files)} items in {stop-start:0.2f} s ({len(database_files)/stop-start:0.1f} items/s)")
+
+    db_hashes = []
+    for db_hash_list in results:
+        db_hashes += db_hash_list
 
     query_files = sorted(glob.glob(os.path.join(query_dir, "*.wav")))
     for query_file in query_files:
         print("-" * 64)
-        x_q, sr_q = torchaudio.load(query_file)
-        x_q = julius.resample_frac(x_q, sr_q, sr_db) # resample to 22.05 kHz
-        q_hashes = fingerprint(x_q, sr_db, filename=os.path.basename(query_file))
+        q_hashes = fingerprint(query_file)
 
         matches = {}
 
