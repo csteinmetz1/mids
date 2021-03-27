@@ -99,6 +99,27 @@ def fingerprint(
 
     return hashes
 
+def find_matches(query_file, db_hashes):
+    q_hashes = fingerprint(query_file)
+
+    matches = {}
+    for q_hash in q_hashes:
+        for db_hash in db_hashes:
+            if db_hash["hash"] == q_hash["hash"]:
+                if db_hash["song"] not in matches:
+                    matches[db_hash["song"]] = 1
+                else:
+                    matches[db_hash["song"]] += 1
+
+    matches = dict(sorted(matches.items(), key=lambda item: item[1], reverse=True))
+    #print(f"query: {os.path.basename(query_file).strip('.wav')}")
+    top_matches = []
+    for idx, (song, count) in enumerate(matches.items()):
+        top_matches.append(song)
+        if idx+1 > 2: break
+
+    return top_matches
+
 if __name__ == '__main__':
 
     database_dir = 'data/database_recordings/'
@@ -106,7 +127,6 @@ if __name__ == '__main__':
 
     # generate hashes for all items in database
     database_files = sorted(glob.glob(os.path.join(database_dir, "*.wav")))
-    #database_files = [(db_file) for db_file in database_files]
     print("Building database...")
     start = time.perf_counter()
     with multiprocessing.Pool(processes=12) as pool:
@@ -119,23 +139,13 @@ if __name__ == '__main__':
         db_hashes += db_hash_list
 
     query_files = sorted(glob.glob(os.path.join(query_dir, "*.wav")))
-    for query_file in query_files:
-        print("-" * 64)
-        q_hashes = fingerprint(query_file)
+    params = zip(query_files, [db_hashes] * len(query_files))
+    start = time.perf_counter()
+    with multiprocessing.Pool(processes=12) as pool:
+        results = pool.starmap(find_matches, params)
+    stop = time.perf_counter()
+    print(f"Analyized {len(query_files)} items in {stop-start:0.2f} s ({len(query_files)/stop-start:0.1f} items/s)")
 
-        matches = {}
-
-        for q_hash in q_hashes:
-            for db_hash in db_hashes:
-                if db_hash["hash"] == q_hash["hash"]:
-                    if db_hash["song"] not in matches:
-                        matches[db_hash["song"]] = 1
-                    else:
-                        matches[db_hash["song"]] += 1
-
-        matches = dict(sorted(matches.items(), key=lambda item: item[1], reverse=True))
-        print(f"query: {os.path.basename(query_file).strip('.wav')}")
-        for idx, (song, count) in enumerate(matches.items()):
-            print(idx+1, song, count)
-            if idx+1 > 2: break
+    for query_file, query_result in zip(query_files, results):
+        print(os.path.basename(query_file), query_result)
 
