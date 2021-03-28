@@ -17,7 +17,7 @@ def fingerprint(
     sample_rate : int = 22050,
     n_fft : int = 2048, 
     hop_length : int = 1024,
-    n_bins : int = 128,
+    n_bins : int = 64,
     plot: bool = False,
     ) -> torch.Tensor:
     """ Compute the finger print for an audio signal.
@@ -56,13 +56,13 @@ def fingerprint(
     X_mag = X.abs().squeeze()
 
     # apply a mel filterbank
-    fb = librosa.filters.mel(sample_rate, n_fft, n_mels=n_bins)
-    fb = torch.tensor(fb)
-    X_mag = torch.matmul(fb, X_mag)
+    #fb = librosa.filters.mel(sample_rate, n_fft, n_mels=n_bins)
+    #fb = torch.tensor(fb)
+    #X_mag = torch.matmul(fb, X_mag)
 
     X_mag_dB = 20 * torch.log(X_mag.clamp(1e-8))
 
-    peaks = peak_local_max(X_mag_dB.numpy(), min_distance=10)
+    peaks = peak_local_max(X_mag_dB.numpy(), min_distance=8)
     
     filename = os.path.basename(audio_file).replace(".wav", "")
     if plot:
@@ -72,8 +72,8 @@ def fingerprint(
         plt.close('all')
 
     # what is the best way to define the target zone?
-    target_zone_freq = 24
-    target_zone_time = 50
+    target_zone_freq = 32
+    target_zone_time = 64
 
     # sort the peaks so they are aligned by time axis
     peaks = peaks[np.argsort(peaks[:, 1])]
@@ -85,6 +85,7 @@ def fingerprint(
 
         # iterate over all peaks again to 
         # find those peaks within target zone
+        peaks_in_target_zone = 0
         for i in range(peaks.shape[0]):
             point = peaks[i,:]
             if ((point[0] < anchor[0] + target_zone_freq) and (point[0] > anchor[0] - target_zone_freq) and 
@@ -95,30 +96,36 @@ def fingerprint(
                     "song" : filename,
                     "timestep" : anchor[1]
                 })
-                # generate a hash (time index, (anchor freq, point freq, time delta))
+                peaks_in_target_zone += 1
 
     return hashes
 
-def find_matches(query_file, db_hashes):
+def find_matches(query_file, db_songs):
     q_hashes = fingerprint(query_file)
 
     matches = {}
-    for q_hash in q_hashes:
-        for db_hash in db_hashes:
-            if db_hash["hash"] == q_hash["hash"]:
-                if db_hash["song"] not in matches:
-                    matches[db_hash["song"]] = 1
-                else:
-                    matches[db_hash["song"]] += 1
+    # iterate over each song in the database
+    for db_song in db_songs:
+        song_id = db_song["song_id"]
+        inverted_lists = db_song["inverted_lists"]
+        match_timesteps = {}
+        # check each query hash
+        for q_hash in q_hashes: # each hash is a query
+            if q_hash["hash"] in inverted_lists: # check if hash is in inverted lists
+                for timestep in inverted_lists[q_hash["hash"]]:
+                    shifted = timestep - q_hash["timestep"]
+                    if shifted not in match_timesteps:
+                        match_timesteps[shifted] = 1
+                    else:
+                        match_timesteps[shifted] += 1
+        if len(match_timesteps.values()) > 0:
+            matches[song_id] =  max(match_timesteps.values())
 
-    matches = dict(sorted(matches.items(), key=lambda item: item[1], reverse=True))
-    #print(f"query: {os.path.basename(query_file).strip('.wav')}")
-    top_matches = []
-    for idx, (song, count) in enumerate(matches.items()):
-        top_matches.append(song)
-        if idx+1 > 2: break
+    # sort the matches
+    matches = [(song_id, score) for song_id, score in matches.items()]
+    matches = sorted(matches, key=lambda a: a[1], reverse=True)
 
-    return top_matches
+    return matches
 
 if __name__ == '__main__':
 
@@ -130,22 +137,47 @@ if __name__ == '__main__':
     print("Building database...")
     start = time.perf_counter()
     with multiprocessing.Pool(processes=12) as pool:
-        results = pool.map(fingerprint, database_files)
+        db_songs_hashes = pool.map(fingerprint, database_files)
     stop = time.perf_counter()
-    print(f"Built database of {len(database_files)} items in {stop-start:0.2f} s ({len(database_files)/stop-start:0.1f} items/s)")
+    print(f"Built database of {len(database_files)} items in {stop-start:0.2f} s ({len(database_files)/(stop-start):0.1f} items/s)")
 
-    db_hashes = []
-    for db_hash_list in results:
-        db_hashes += db_hash_list
+    db_songs = []
+
+    for db_song in db_songs_hashes:
+        db_song_inv_lists = {}
+        song_id = db_song[0]["song"]
+        for db_song_hash in db_song:
+            if db_song_hash["hash"] not in db_song_inv_lists:
+                db_song_inv_lists[db_song_hash["hash"]] = [db_song_hash["timestep"]]
+            else:
+                db_song_inv_lists[db_song_hash["hash"]] += db_song_hash["timestep"]
+        db_songs.append({
+            "song_id" : song_id,
+            "inverted_lists" : db_song_inv_lists
+        })
 
     query_files = sorted(glob.glob(os.path.join(query_dir, "*.wav")))
-    params = zip(query_files, [db_hashes] * len(query_files))
+
+    # metrics 
+    correct = 0
+    incorrect = 0
+
+    #params = zip(query_files, [db_songs] * len(query_files))
     start = time.perf_counter()
-    with multiprocessing.Pool(processes=12) as pool:
-        results = pool.starmap(find_matches, params)
+    for query_file in query_files:
+        matches = find_matches(query_file, db_songs)
+        print(os.path.basename(query_file))
+        print(matches[:3])
+        print("-" * 64)
+        gt_song_id = os.path.basename(query_file).split("-")[0]
+        if gt_song_id == matches[0][0]:
+            correct += 1
+        else:
+            incorrect += 1 
+    #with multiprocessing.Pool(processes=12) as pool:
+    #    results = pool.starmap(find_matches, params)
     stop = time.perf_counter()
-    print(f"Analyized {len(query_files)} items in {stop-start:0.2f} s ({len(query_files)/stop-start:0.1f} items/s)")
-
-    for query_file, query_result in zip(query_files, results):
-        print(os.path.basename(query_file), query_result)
-
+    accuracy = correct / (correct + incorrect)
+    print(f"Accuracy: {accuracy*100:0.2f}%")
+    print(f"Analyized {len(query_files)} items in {stop-start:0.2f} s ({len(query_files)/(stop-start):0.1f} items/s)")
+    print("-" * 64)
