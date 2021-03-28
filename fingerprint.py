@@ -7,6 +7,7 @@ import julius
 import librosa
 import torchaudio
 import numpy as np
+import scipy.signal
 from tqdm import tqdm
 import multiprocessing
 import matplotlib.pyplot as plt
@@ -16,18 +17,28 @@ def fingerprint(
     audio_file : str,
     sample_rate : int = 22050,
     n_fft : int = 2048, 
-    hop_length : int = 1024,
-    n_bins : int = 64,
-    plot: bool = False,
+    hop_length : int = 512,
+    use_log : bool = True,
+    use_mel : bool = False,
+    n_bins : int = 128,
+    peak_distace : int = 16,
+    target_zone_freq : int = 32,
+    target_zone_time : int = 64,
+    plot : bool = True,
     ) -> torch.Tensor:
-    """ Compute the finger print for an audio signal.
+    """ Compute the fingerprint for an audio signal.
     
     Args:
         audio_file (str): Path to audio file to fingerprint.
         sample_rate (float): Desired sample rate of the audio signal.
         n_fft (int): Size of the FFT used for computation of the STFT.
         hop_length (int): Number of steps between each frame in the STFT.
+        use_log (bool): Represent STFT magnitudes on log-scale. 
+        use_mel (bool): Project STFT bins in Mel-scale. 
         n_bins (int): Number of mel-frequency bins.
+        peak_distance (int): Minimum distance between spectral peaks.
+        target_zone_freq (int): Number of frequency bins above and below anchor.
+        target_zone_time (int): Number of timesteps in front of anchor. 
         plot (bool): Save a plot of the spectrogram and peaks.
     
     Returns:
@@ -47,6 +58,11 @@ def fingerprint(
     # peak normalize x
     x /= x.abs().max()
 
+    # apply a lowpass filter
+    sos = scipy.signal.butter(8, 8000, 'lp', fs=sample_rate, output='sos')
+    x = scipy.signal.sosfilt(sos, x.numpy())
+    x = torch.tensor(x)
+
     X = torch.stft(
         x, 
         n_fft, 
@@ -56,24 +72,22 @@ def fingerprint(
     X_mag = X.abs().squeeze()
 
     # apply a mel filterbank
-    #fb = librosa.filters.mel(sample_rate, n_fft, n_mels=n_bins)
-    #fb = torch.tensor(fb)
-    #X_mag = torch.matmul(fb, X_mag)
+    if use_mel:
+        fb = librosa.filters.mel(sample_rate, n_fft, n_mels=n_bins)
+        fb = torch.tensor(fb)
+        X_mag = torch.matmul(fb, X_mag)
 
-    X_mag_dB = 20 * torch.log(X_mag.clamp(1e-8))
+    if use_log:
+        X_mag = 20 * torch.log(X_mag.clamp(1e-8))
 
-    peaks = peak_local_max(X_mag_dB.numpy(), min_distance=8)
+    peaks = peak_local_max(X_mag.numpy(), min_distance=peak_distace)
     
     filename = os.path.basename(audio_file).replace(".wav", "")
     if plot:
-        plt.pcolormesh(X_mag_dB)
+        plt.pcolormesh(X_mag)
         plt.scatter(peaks[:,1], peaks[:,0], facecolors='none', edgecolors='k')
         plt.savefig(f'data/outputs/{filename}.png')
         plt.close('all')
-
-    # what is the best way to define the target zone?
-    target_zone_freq = 32
-    target_zone_time = 64
 
     # sort the peaks so they are aligned by time axis
     peaks = peaks[np.argsort(peaks[:, 1])]
@@ -89,7 +103,7 @@ def fingerprint(
         for i in range(peaks.shape[0]):
             point = peaks[i,:]
             if ((point[0] < anchor[0] + target_zone_freq) and (point[0] > anchor[0] - target_zone_freq) and 
-                (point[1] < anchor[1] + target_zone_time) and (point[1] > anchor[1] + 5) and 
+                (point[1] < anchor[1] + target_zone_time) and (point[1] > anchor[1] + 1) and 
                 not np.array_equal(point, anchor)):
                 hashes.append({
                     "hash" : (anchor[0], point[0], point[1] - anchor[1]),
@@ -119,7 +133,8 @@ def find_matches(query_file, db_songs):
                     else:
                         match_timesteps[shifted] += 1
         if len(match_timesteps.values()) > 0:
-            matches[song_id] =  max(match_timesteps.values())
+            matches[song_id] = max(match_timesteps.values())
+            #matches[song_id] = sum(match_timesteps.values())
 
     # sort the matches
     matches = [(song_id, score) for song_id, score in matches.items()]
@@ -162,7 +177,6 @@ if __name__ == '__main__':
     correct = 0
     incorrect = 0
 
-    #params = zip(query_files, [db_songs] * len(query_files))
     start = time.perf_counter()
     for query_file in query_files:
         matches = find_matches(query_file, db_songs)
@@ -174,8 +188,7 @@ if __name__ == '__main__':
             correct += 1
         else:
             incorrect += 1 
-    #with multiprocessing.Pool(processes=12) as pool:
-    #    results = pool.starmap(find_matches, params)
+
     stop = time.perf_counter()
     accuracy = correct / (correct + incorrect)
     print(f"Accuracy: {accuracy*100:0.2f}%")
