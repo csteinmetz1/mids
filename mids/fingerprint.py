@@ -2,89 +2,107 @@ import os
 import sys
 import glob
 import time
-import torch
-import julius
+import resampy
 import librosa
-import torchaudio
 import numpy as np
 import scipy.signal
 from tqdm import tqdm
+import soundfile as sf
 import multiprocessing
 import matplotlib.pyplot as plt
 from skimage.feature import peak_local_max
 
 def fingerprint(
-    audio_file : str,
-    sample_rate : int = 22050,
-    n_fft : int = 2048, 
-    hop_length : int = 512,
-    use_log : bool = True,
-    use_mel : bool = False,
-    n_bins : int = 128,
-    peak_distace : int = 16,
-    target_zone_freq : int = 32,
-    target_zone_time : int = 64,
-    plot : bool = True,
-    ) -> torch.Tensor:
+        audio_file : str,
+        sample_rate : int = 22050,
+        lowpass_fc : int = 8000,
+        n_fft : int = 2048, 
+        hop_length : int = 512,
+        win_length : int = None,
+        window : str = 'hann',
+        use_log : bool = True,
+        use_mel : bool = False,
+        n_bins : int = 128,
+        peak_distance : int = 18,
+        target_zone_freq : int = 64,
+        target_zone_time : int = 128,
+        eps : float = 1e-16,
+        plot : bool = False,
+    ) -> list:
     """ Compute the fingerprint for an audio signal.
     
     Args:
         audio_file (str): Path to audio file to fingerprint.
         sample_rate (float): Desired sample rate of the audio signal.
+        lowpass_fc (float): Lowpass pre-filter cutoff frequency.
         n_fft (int): Size of the FFT used for computation of the STFT.
         hop_length (int): Number of steps between each frame in the STFT.
+        win_length (int): Size of the window. Defaults to `n_fft`.
+        window (str): Window type to use. 
         use_log (bool): Represent STFT magnitudes on log-scale. 
         use_mel (bool): Project STFT bins in Mel-scale. 
         n_bins (int): Number of mel-frequency bins.
         peak_distance (int): Minimum distance between spectral peaks.
         target_zone_freq (int): Number of frequency bins above and below anchor.
         target_zone_time (int): Number of timesteps in front of anchor. 
+        eps (float): Small epsilon for numerical stability. 
         plot (bool): Save a plot of the spectrogram and peaks.
     
     Returns:
-        f (tensor): Fingerprint corresponding to the input audio signal.
+        hasesh (list): List of hashes corresponding to the fingerprint.
 
     Note: If the audio loaded is at a different sample rate to the one specificed
     the audio will be resampled to match the specified sample rate. 
     """
 
     # load audio file
-    x, sr = torchaudio.load(audio_file)
+    x, sr = sf.read(audio_file)
 
     # resample if needed
     if sr != sample_rate:
-        x = julius.resample_frac(x, sr, sample_rate) # resample to 22.05 kHz
+        x = resampy.resample(x, sr, sample_rate) # resample to 22.05 kHz
 
     # peak normalize x
-    x /= x.abs().max()
+    x /= np.max(np.abs(x))
 
     # apply a lowpass filter
-    sos = scipy.signal.butter(8, 8000, 'lp', fs=sample_rate, output='sos')
-    x = scipy.signal.sosfilt(sos, x.numpy())
-    x = torch.tensor(x)
+    if lowpass_fc is not None:
+        sos = scipy.signal.butter(8, lowpass_fc, 'lp', fs=sample_rate, output='sos')
+        x = scipy.signal.sosfilt(sos, x)
 
-    X = torch.stft(
+    # compute the STFT with the provided params
+    X = librosa.stft(
         x, 
-        n_fft, 
-        hop_length=hop_length, 
-        return_complex=True)
+        n_fft=n_fft, 
+        hop_length=hop_length,
+        win_length=win_length,
+        window=window
+    )
 
-    X_mag = X.abs().squeeze()
+    # magnitude
+    X = np.abs(X)
 
     # apply a mel filterbank
     if use_mel:
         fb = librosa.filters.mel(sample_rate, n_fft, n_mels=n_bins)
-        fb = torch.tensor(fb)
-        X_mag = torch.matmul(fb, X_mag)
+        X = np.matmul(fb, X)
 
+    # if we used a lowpass do not consider HF peaks
+    if lowpass_fc is not None:
+        bin_width = (1/2) * (sample_rate/n_fft)
+        max_freq_bin = int(lowpass_fc / bin_width)
+        X = X[:max_freq_bin,:]
+
+    # convert to magnitude dB scale
     if use_log:
-        X_mag = 20 * torch.log(X_mag.clamp(1e-8))
+       X = 20 * np.log10(X + eps)
 
-    peaks = peak_local_max(X_mag.numpy(), min_distance=peak_distace)
+    # find the peaks
+    peaks = peak_local_max(X, min_distance=peak_distance)
     
     filename = os.path.basename(audio_file).replace(".wav", "")
     if plot:
-        plt.pcolormesh(X_mag)
+        plt.pcolormesh(X)
         plt.scatter(peaks[:,1], peaks[:,0], facecolors='none', edgecolors='k')
         plt.savefig(f'data/outputs/{filename}.png')
         plt.close('all')
@@ -114,8 +132,21 @@ def fingerprint(
 
     return hashes
 
-def find_matches(query_file, db_songs):
-    q_hashes = fingerprint(query_file)
+def find_matches(
+        query_hashes, 
+        db_songs
+    ) -> list:
+    """ Find matches of a query with the database hashes.
+
+    Args:
+        query_hashes (list): list of pre-computed query fingerprint hashes. 
+        db_songs (list): List of songs with their pre-computed hashes.
+
+    Returns:
+        matches (list): List of tuples that contain the song id, and
+                        the score for each song in the database. 
+
+    """
 
     matches = {}
     # iterate over each song in the database
@@ -123,8 +154,7 @@ def find_matches(query_file, db_songs):
         song_id = db_song["song_id"]
         inverted_lists = db_song["inverted_lists"]
         match_timesteps = {}
-        # check each query hash
-        for q_hash in q_hashes: # each hash is a query
+        for q_hash in query_hashes: # each hash is a query
             if q_hash["hash"] in inverted_lists: # check if hash is in inverted lists
                 for timestep in inverted_lists[q_hash["hash"]]:
                     shifted = timestep - q_hash["timestep"]
@@ -133,14 +163,70 @@ def find_matches(query_file, db_songs):
                     else:
                         match_timesteps[shifted] += 1
         if len(match_timesteps.values()) > 0:
+            # return the max value of the mathcing function histogram
             matches[song_id] = max(match_timesteps.values())
-            #matches[song_id] = sum(match_timesteps.values())
-
-    # sort the matches
-    matches = [(song_id, score) for song_id, score in matches.items()]
-    matches = sorted(matches, key=lambda a: a[1], reverse=True)
 
     return matches
+
+def compute_accuracy_metrics(
+        query_files, 
+        query_matches, 
+        N=3
+    ) -> dict:
+    """ Compute the top-1 down to top-N acccuracy metrics. 
+
+    Args:
+        query_files (list): List of query filenames.
+        query_matches (list): List of list of tuples containing (song_id, score).
+        N (int): The lowest top-N match accuracy to compute. 
+
+    Returns: 
+        metrics (dict): Computed metrics.
+
+    ex: 
+    ```
+    metrics = {
+        "top-1" : 0.62,
+        "top-2" : 0.71.
+        ....
+        "top-N" : 0.89,
+    }
+    ```
+    """
+
+    # check if we have same number of matches as queries
+    assert(len(query_files) == len(query_matches))
+
+    # total number of queries
+    M = len(query_files)
+
+    # storage for our metrics
+    metrics = {}
+
+    for query_file, matches in zip(query_files, query_matches):
+
+        # get the ground truth song id
+        query_id = os.path.basename(query_file).strip(".wav")
+        song_id = query_id.split('-')[0]
+
+        # sort the matches so that highest scoring are ranked first
+        matches = [(db_song_id, score) for db_song_id, score in matches.items()]
+        matches = sorted(matches, key=lambda a: a[1], reverse=True)
+
+        for n in range(N):
+            key = f"Top-{n+1}"
+            # create a list containing just top-N matched song ids
+            top_n_matches = [match[0] for match in matches[:n+1]]
+            if song_id in top_n_matches:
+                if key not in metrics:
+                    metrics[key] = 1
+                else:
+                    metrics[key] += 1
+
+    for key, val in metrics.items():
+        metrics[key] /= M
+
+    return metrics
 
 if __name__ == '__main__':
 
@@ -172,25 +258,18 @@ if __name__ == '__main__':
         })
 
     query_files = sorted(glob.glob(os.path.join(query_dir, "*.wav")))
-
-    # metrics 
-    correct = 0
-    incorrect = 0
+    query_matches = [] # we will stop all matches here
 
     start = time.perf_counter()
     for query_file in query_files:
-        matches = find_matches(query_file, db_songs)
-        print(os.path.basename(query_file))
-        print(matches[:3])
-        print("-" * 64)
-        gt_song_id = os.path.basename(query_file).split("-")[0]
-        if gt_song_id == matches[0][0]:
-            correct += 1
-        else:
-            incorrect += 1 
-
+        query_matches = append(find_matches(query_file, db_songs))
     stop = time.perf_counter()
-    accuracy = correct / (correct + incorrect)
-    print(f"Accuracy: {accuracy*100:0.2f}%")
+        
+    print("-" * 64)
+    metrics = compute_accuracy_metrics(query_files, query_matches)
+    for key, val in metrics.items():
+        print(f"{key} acc.  {val*100:0.2f}%")
+
+    print()
     print(f"Analyized {len(query_files)} items in {stop-start:0.2f} s ({len(query_files)/(stop-start):0.1f} items/s)")
     print("-" * 64)
