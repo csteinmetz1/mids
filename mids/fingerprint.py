@@ -15,7 +15,7 @@ from skimage.feature import peak_local_max
 def fingerprint(
         audio_file : str,
         sample_rate : int = 22050,
-        lowpass_fc : int = 8000,
+        lowpass_fc : int = None,
         n_fft : int = 2048, 
         hop_length : int = 512,
         win_length : int = None,
@@ -28,6 +28,7 @@ def fingerprint(
         target_zone_time : int = 128,
         eps : float = 1e-16,
         plot : bool = False,
+        **kwargs,
     ) -> list:
     """ Compute the fingerprint for an audio signal.
     
@@ -133,14 +134,16 @@ def fingerprint(
     return hashes
 
 def find_matches(
-        query_hashes, 
-        db_songs
+        query_hashes : list, 
+        db_songs : list,
+        num_threads : int = 0,
     ) -> list:
     """ Find matches of a query with the database hashes.
 
     Args:
         query_hashes (list): list of pre-computed query fingerprint hashes. 
         db_songs (list): List of songs with their pre-computed hashes.
+        num_threads (int): Number of parallel tasks to launch.
 
     Returns:
         matches (list): List of tuples that contain the song id, and
@@ -162,6 +165,7 @@ def find_matches(
                         match_timesteps[shifted] = 1
                     else:
                         match_timesteps[shifted] += 1
+
         if len(match_timesteps.values()) > 0:
             # return the max value of the mathcing function histogram
             matches[song_id] = max(match_timesteps.values())
@@ -262,7 +266,8 @@ if __name__ == '__main__':
 
     start = time.perf_counter()
     for query_file in query_files:
-        query_matches = append(find_matches(query_file, db_songs))
+        query_hashes = fingerprint(query_file)
+        query_matches.append(find_matches(query_hashes, db_songs))
     stop = time.perf_counter()
         
     print("-" * 64)
