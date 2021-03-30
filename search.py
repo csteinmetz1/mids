@@ -6,7 +6,8 @@ import multiprocessing
 import matplotlib.pyplot as plt
 
 from tqdm import tqdm
-from mids.fingerprint import fingerprint, find_matches, compute_accuracy_metrics
+from mids.fingerprint import fingerprint
+from mids.matches import find_matches, compute_accuracy_metrics
 
 def fingerprint_wrapper(kwargs):
     return fingerprint(**kwargs)
@@ -86,15 +87,6 @@ def search(
         query_matches.append(find_matches(query_hashes, db_songs))
     stop = time.perf_counter()
 
-    #query_files = sorted(glob.glob(os.path.join(query_dir, "*.wav")))
-    #query_matches = [] # we will stop all matches here
-
-    #start = time.perf_counter()
-    #for query_file in query_files:
-    #    query_hashes = fingerprint(query_file)
-    #    query_matches.append(find_matches(query_hashes, db_songs))
-    #stop = time.perf_counter()
-
     query_time = stop-start
         
     metrics = compute_accuracy_metrics(query_files, query_matches)
@@ -150,6 +142,3 @@ if __name__ == '__main__':
 
     with open(os.path.join("data", "search", f'{param_name}.pkl'), 'wb') as f:
         pickle.dump(search_results, f)
-
-
-    

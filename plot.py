@@ -4,7 +4,11 @@ import pickle
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_results(search_results, param_name="peak_distance", output_dir="data/search"):
+def plot_results(
+        search_results : list, 
+        param_name : str = "peak_distance", 
+        output_dir : str = "data/search"
+    ):
 
     if not os.path.isdir(output_dir):
         os.makedirs(output_dir)
@@ -34,6 +38,7 @@ def plot_results(search_results, param_name="peak_distance", output_dir="data/se
     plt.tight_layout()
 
     plt.savefig(os.path.join(output_dir, f'{param_name}.png'))
+    plt.savefig(os.path.join(output_dir, f'{param_name}.pdf'))
     plt.close('all')
 
 if __name__ == '__main__':
