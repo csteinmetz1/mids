@@ -109,7 +109,7 @@ if __name__ == '__main__':
     #peak_distances = [12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32, 34, 36]
     #n_ffts = [512, 1024, 2048, 4096, 8192]
     #hop_lengths = [int(n_fft/4) for n_fft in n_ffts]
-    #hop_lengths = [1/12, 1/10, 1/8, 1/6, 1/4, 1/3, 1/2]
+    hop_lengths = [1/12, 1/10, 1/8, 1/6, 1/4, 1/3, 1/2]
     #target_zone_freqs = [16, 24, 32, 48, 64, 128, 256, 512]
     #target_zone_times = [16, 24, 32, 48, 64, 128, 256, 512]
     #lowpass_fcs = [1000, 2000, 3000, 4000, 5000, 6000, 8000, 10000]
@@ -117,27 +117,27 @@ if __name__ == '__main__':
     num_max_peaks = [2, 4, 8, 10, 16, 24, 32, 40, 60]
 
     search_results = []
-    param_name = "max_peaks"
+    param_name = "hop_length"
 
-    #for hop_length in tqdm(hop_lengths, ncols=80):
+    for hop_length in tqdm(hop_lengths, ncols=80):
     #for n_fft, hop_length in tqdm(zip(n_ffts, hop_lengths), ncols=80):
     #for peak_distance in tqdm(peak_distances, ncols=80):
     #for target_zone_freq in tqdm(target_zone_freqs, ncols=80):
     #for target_zone_time in tqdm(target_zone_times, ncols=80):
     #for lowpass_fc in tqdm(lowpass_fcs, ncols=80):
     #for threshold_abs in tqdm(thresholds, ncols=80):
-    for max_peaks in tqdm(num_max_peaks, ncols=80):
+    #for max_peaks in tqdm(num_max_peaks, ncols=80):
 
 
         params = {
             "n_fft" : 2048,
-            "hop_length" : 256,
+            "hop_length" : int(2048 * hop_length),
             "peak_distance" : 26,
             "target_zone_freq" : 128,
             "target_zone_time" : 256,
             "lowpass_fc" : None,
             "threshold_abs" : -40,
-            "max_peaks" : max_peaks,
+            "max_peaks" : 24,
         }
 
         search_results.append(

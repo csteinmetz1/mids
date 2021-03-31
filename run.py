@@ -1,7 +1,9 @@
 import os
+import sys
 import time
 import glob
 import pickle
+import numpy as np
 import multiprocessing
 
 from mids.fingerprint import fingerprint
@@ -52,7 +54,6 @@ def fingerprintBuilder(
     # save list of database song hashes to disk
     with open(fingerprints_filepath, 'wb') as f:
         pickle.dump(db_songs, f)
-    
 
 def audioIdentification(
         query_dir : str,
@@ -71,21 +72,25 @@ def audioIdentification(
     start = time.perf_counter()
 
     if num_threads > 0:
-        with multiprocessing.Pool(processes=24) as pool:
+        with multiprocessing.Pool(processes=num_threads) as pool:
             query_songs_hashes = pool.map(fingerprint, query_files)
     else:
         query_songs_hashes = []
         for query_file in query_files:
             query_songs_hashes.append(fingerprint(query_file))
+    stop = time.perf_counter()
 
-    query_matches = [] # we will stop all matches here
+    print(f"Fingerprinted {len(query_files)} queries in {stop-start:0.2f} s ({len(query_files)/(stop-start):0.1f} items/s)")
+
+    query_matches = [] # we will store all matches here
     print("Finding matches...")
+    start = time.perf_counter()
     for query_hashes in query_songs_hashes:
         query_matches.append(find_matches(query_hashes, db_songs))
     stop = time.perf_counter()
 
     print("-" * 64)
-    metrics = compute_accuracy_metrics(query_files, query_matches)
+    metrics = compute_accuracy_metrics(query_files, query_matches, N=10)
     for key, val in metrics.items():
         print(f"{key} acc.  {val*100:0.2f}%")
 
@@ -111,6 +116,34 @@ def audioIdentification(
                 if n > 2: break
             f.write("\n")
 
+def baseline(
+        database_dir : str,
+        query_dir : str,
+        num_threads : int = 0
+    ):
+
+    database_files = sorted(glob.glob(os.path.join(database_dir, "*.wav")))
+    query_files = sorted(glob.glob(os.path.join(query_dir, "*.wav")))
+
+    query_matches = []
+
+    # create random queries 
+    for query_file in query_files:
+        rand_matches = np.random.permutation(database_files)
+        rand_matches = [os.path.basename(f).replace('.wav','') for f in rand_matches]
+        matches = {}
+        for f in rand_matches:
+            matches[f] = 0
+        query_matches.append(matches)
+
+    print("Baseline (random guessing)")
+    print("-" * 64)
+    metrics = compute_accuracy_metrics(query_files, query_matches, N=10)
+    for key, val in metrics.items():
+        print(f"{key} acc.  {val*100:0.2f}%")
+    print("-" * 64)
+    
+
 if __name__ == '__main__':
 
     database_dir = 'data/database_recordings/'
@@ -118,6 +151,11 @@ if __name__ == '__main__':
     fingerprint_filepath = 'data/fingerprints.pkl'
     output_filepath = 'data/matches.txt'
     num_threads = 8 # adjust this based on CPU
+
+    baseline(
+        database_dir,
+        query_dir
+    )
 
     fingerprintBuilder(
                 database_dir, 
