@@ -35,7 +35,10 @@ def fingerprintBuilder(
     # create a list of dicts, which the song id, and inverted lists
     for db_song in db_songs_hashes:
         db_song_inv_lists = {}
+        if len(db_song) < 1:
+            print(db_song)
         song_id = db_song[0]["song"]
+        
         for db_song_hash in db_song:
             if db_song_hash["hash"] not in db_song_inv_lists:
                 db_song_inv_lists[db_song_hash["hash"]] = [db_song_hash["timestep"]]
@@ -103,8 +106,9 @@ def audioIdentification(
             matches = [(db_song_id, score) for db_song_id, score in matches.items()]
             matches = sorted(matches, key=lambda a: a[1], reverse=True)
 
-            for n in range(3): # write out the top three matches
+            for n in range(len(matches)): # write out the top three matches
                 f.write(f"{matches[n][0]}.wav\t")
+                if n > 2: break
             f.write("\n")
 
 if __name__ == '__main__':
@@ -113,7 +117,7 @@ if __name__ == '__main__':
     query_dir = 'data/query_recordings/'
     fingerprint_filepath = 'data/fingerprints.pkl'
     output_filepath = 'data/matches.txt'
-    num_threads = 24 # adjust this based on CPU
+    num_threads = 8 # adjust this based on CPU
 
     fingerprintBuilder(
                 database_dir, 

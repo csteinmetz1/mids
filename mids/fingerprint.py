@@ -1,29 +1,40 @@
 import os
+import sys
 import glob
 import resampy
 import librosa
 import numpy as np
 import scipy.signal
+import librosa.display
 import soundfile as sf
 import matplotlib.pyplot as plt
 from skimage.feature import peak_local_max
+
+# optimal
+# n_fft = 1024
+# hop_length = 256
+# peak_distance = 14
+# target_zone_freq = 128
+# target_zone_time = 256
 
 def fingerprint(
         audio_file : str,
         sample_rate : int = 22050,
         lowpass_fc : int = 6000,
-        n_fft : int = 1024, 
-        hop_length : int = 256,
+        n_fft : int = 2048, 
+        hop_length : int = 512,
         win_length : int = None,
         window : str = 'hann',
         use_log : bool = True,
         use_mel : bool = False,
         n_bins : int = 128,
-        peak_distance : int = 14,
-        target_zone_freq : int = 128,
-        target_zone_time : int = 256,
+        peak_distance : int = 18,
+        threshold_abs : float = -60,
+        target_zone_freq : int = 256,
+        target_zone_time : int = 128,
+        max_peaks : int = 24,
         eps : float = 1e-16,
-        plot : bool = False,
+        plot : bool = True,
         **kwargs,
     ) -> list:
     """ Compute the fingerprint for an audio signal.
@@ -40,8 +51,10 @@ def fingerprint(
         use_mel (bool): Project STFT bins in Mel-scale. 
         n_bins (int): Number of mel-frequency bins.
         peak_distance (int): Minimum distance between spectral peaks.
+        threshold_abs (float): Minimum peak ampltiude in dB.
         target_zone_freq (int): Number of frequency bins above and below anchor.
         target_zone_time (int): Number of timesteps in front of anchor. 
+        max_peaks (int): Maximum number of peaks within the target zone to consider.
         eps (float): Small epsilon for numerical stability. 
         plot (bool): Save a plot of the spectrogram and peaks.
     
@@ -68,7 +81,7 @@ def fingerprint(
         x = scipy.signal.sosfilt(sos, x)
 
     # compute the STFT with the provided params
-    X = librosa.stft(
+    D = librosa.stft(
         x, 
         n_fft=n_fft, 
         hop_length=hop_length,
@@ -77,7 +90,8 @@ def fingerprint(
     )
 
     # magnitude
-    X = np.abs(X)
+    X = np.abs(D)
+    X /= np.max(X)
 
     # apply a mel filterbank
     if use_mel:
@@ -85,24 +99,40 @@ def fingerprint(
         X = np.matmul(fb, X)
 
     # if we used a lowpass do not consider HF peaks
+    bin_width = (1/2) * (sample_rate/n_fft)
     if lowpass_fc is not None:
-        bin_width = (1/2) * (sample_rate/n_fft)
         max_freq_bin = int(lowpass_fc / bin_width)
         X = X[:max_freq_bin,:]
 
     # convert to magnitude dB scale
     if use_log:
        X = 20 * np.log10(X + eps)
+    
+    peaks = peak_local_max(
+                    X, 
+                    min_distance=peak_distance, 
+                    threshold_abs=threshold_abs
+                )
 
-    # find the peaks
-    peaks = peak_local_max(X, min_distance=peak_distance)
+    # peaks per second
+    #print(len(peaks)/(x.shape[-1]/sample_rate))
     
     # optionally save out a plot of the spectrogram and peaks
     filename = os.path.basename(audio_file).replace(".wav", "")
     if plot:
-        plt.pcolormesh(X)
-        plt.scatter(peaks[:,1], peaks[:,0], facecolors='none', edgecolors='k')
+        #D = librosa.amplitude_to_db(D, ref=np.max)
+        #librosa.display.specshow(
+        #                    D, 
+        #                    sr=sample_rate, 
+        #                    hop_length=hop_length, 
+        #                    x_axis='time', 
+        #                    y_axis='log')
+        #plt.colorbar(format='%+2.0f dB')
+        plt.scatter((peaks[:,1]*(n_fft/2))/sample_rate, peaks[:,0] * bin_width, facecolors='none', edgecolors='k')
+        plt.xlabel('Time (s)')
+        plt.ylabel('Frequency (Hz)')
         plt.savefig(f'data/outputs/{filename}.png')
+        plt.savefig(f'data/outputs/{filename}.pdf')
         plt.close('all')
 
     # sort the peaks so they are aligned by time axis
@@ -128,5 +158,9 @@ def fingerprint(
                     "timestep" : anchor[1]
                 })
                 peaks_in_target_zone += 1
+            if peaks_in_target_zone > max_peaks: break
+
+    if len(hashes) < 1:
+        print(f"No hashes found. {filename}")
 
     return hashes
