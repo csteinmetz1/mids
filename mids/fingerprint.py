@@ -124,8 +124,8 @@ def fingerprint(
         plt.scatter((peaks[:,1]*(n_fft/2))/sample_rate, peaks[:,0] * bin_width, facecolors='none', edgecolors='k')
         plt.xlabel('Time (s)')
         plt.ylabel('Frequency (Hz)')
-        plt.savefig(f'data/outputs/{filename}.png')
-        plt.savefig(f'data/outputs/{filename}.pdf')
+        plt.savefig(f'data/{filename}.png')
+        plt.savefig(f'data/{filename}.pdf')
         plt.close('all')
 
     # sort the peaks so they are aligned by time axis
