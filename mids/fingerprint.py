@@ -10,13 +10,6 @@ import soundfile as sf
 import matplotlib.pyplot as plt
 from skimage.feature import peak_local_max
 
-# optimal
-# n_fft = 1024
-# hop_length = 256
-# peak_distance = 14
-# target_zone_freq = 128
-# target_zone_time = 256
-
 def fingerprint(
         audio_file : str,
         sample_rate : int = 22050,
@@ -34,7 +27,7 @@ def fingerprint(
         target_zone_time : int = 128,
         max_peaks : int = 24,
         eps : float = 1e-16,
-        plot : bool = True,
+        plot : bool = False,
         **kwargs,
     ) -> list:
     """ Compute the fingerprint for an audio signal.

@@ -14,7 +14,8 @@ These can be downloaded as follows, and then placed in the `data/` directory.
 ```
 wget -O database.zip https://collect.qmul.ac.uk/down?t=R8SDLMOKUOSCD2VB/6P63FFT4AN0581R7V49FJKO 
 wget -O query.zip https://collect.qmul.ac.uk/down?t=450TPH3RDUJNA920/6P4TNTJT7GSTR7NUC226IJ8
-unzip database.zip query.zip
+unzip database.zip 
+unzip query.zip
 mkdir data
 mv database_recordings/ data/
 mv query_recordings/ data/
